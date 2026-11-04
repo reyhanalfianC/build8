@@ -2,6 +2,16 @@ name: Build APK
 
 on:
   workflow_dispatch:
+    inputs:
+      jobId:
+        description: 'Job ID'
+        required: false
+      userId:
+        description: 'User ID'
+        required: false
+      payload:
+        description: 'Payload'
+        required: false
 
 permissions:
   contents: read
