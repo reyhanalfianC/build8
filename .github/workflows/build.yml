@@ -31,6 +31,17 @@ jobs:
         with:
           flutter-version: '3.38.0'
           channel: 'stable'
+          cache: true
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
       - name: Prepare Project
         env:
@@ -65,15 +76,16 @@ jobs:
           echo "PROJECT_ROOT=$(dirname "$PUBSPEC")" >> "$GITHUB_ENV"
 
       - name: Build APK
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dorg.gradle.parallel=true -Dorg.gradle.caching=true"
         run: |
           set -e
           cd "$PROJECT_ROOT"
-          flutter clean
           flutter pub get
           if [ "$BUILD_TYPE" = "debug" ]; then
-            flutter build apk --debug
+            flutter build apk --debug --target-platform android-arm64
           else
-            flutter build apk --release
+            flutter build apk --release --target-platform android-arm64
           fi
 
       - name: Locate APK
@@ -92,3 +104,5 @@ jobs:
         with:
           name: apk-${{ github.event.inputs.jobId }}
           path: ${{ env.APK_PATH }}
+          compression-level: 0
+          retention-days: 1
