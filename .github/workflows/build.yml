@@ -1,17 +1,17 @@
-name: Build APK
+name: Build Flutter APK (Fallback Worker)
 
 on:
   workflow_dispatch:
     inputs:
       jobId:
-        description: 'Job ID'
-        required: false
+        description: 'Job ID from Bot'
+        required: true
       userId:
         description: 'User ID'
-        required: false
+        required: true
       payload:
-        description: 'Payload'
-        required: false
+        description: 'Build Payload (JSON)'
+        required: true
 
 permissions:
   contents: read
@@ -19,43 +19,76 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Lihat isi repo
-        run: ls -la && find . -maxdepth 3 -not -path "./.git/*" | head -60
-
-      - name: Unzip project
-        run: |
-          find . -maxdepth 3 -name "*.zip" -not -path "./.git/*" -exec unzip -o -q {} \;
-
-      - name: Find project root
-        id: root
-        run: |
-          P=$(find . -name pubspec.yaml -not -path "*/.*" -not -path "*/.pub-cache/*" | head -n1)
-          if [ -z "$P" ]; then
-            echo "pubspec.yaml tidak ditemukan"
-            exit 1
-          fi
-          echo "dir=$(dirname "$P")" >> "$GITHUB_OUTPUT"
-
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: "17"
+          distribution: 'zulu'
+          java-version: '17'
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: '3.38.0'
+          channel: 'stable'
 
-      - name: Install Dependencies
-        working-directory: ${{ steps.root.outputs.dir }}
-        run: flutter pub get
+      - name: Prepare Project
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PAYLOAD: ${{ github.event.inputs.payload }}
+        run: |
+          set -e
+          echo "$PAYLOAD" > payload.json
+          cat payload.json
+          ASSET_URL=$(jq -r '.zipAssetUrl // .url // empty' payload.json)
+          TAG=$(jq -r '.tag // empty' payload.json)
+          BUILD_TYPE=$(jq -r '.buildType // "release"' payload.json)
+          echo "BUILD_TYPE=$BUILD_TYPE" >> "$GITHUB_ENV"
+          if [ -z "$ASSET_URL" ]; then
+            echo "::error::Tidak ada url di payload"
+            exit 1
+          fi
+          rm -rf project project.zip
+          mkdir -p project
+          if ! curl -fL -o project.zip "$ASSET_URL"; then
+            echo "curl gagal (repo private?), coba lewat gh release download"
+            gh release download "$TAG" --pattern "*.zip" --output project.zip --clobber
+          fi
+          unzip -q project.zip -d project
+          PUBSPEC=$(find project -maxdepth 5 -type f -name pubspec.yaml | head -n 1)
+          if [ -z "$PUBSPEC" ]; then
+            echo "::error::pubspec.yaml tidak ditemukan di dalam ZIP"
+            find project -maxdepth 3
+            exit 1
+          fi
+          echo "PROJECT_ROOT=$(dirname "$PUBSPEC")" >> "$GITHUB_ENV"
 
       - name: Build APK
-        working-directory: ${{ steps.root.outputs.dir }}
-        run: flutter build apk --release
+        run: |
+          set -e
+          cd "$PROJECT_ROOT"
+          flutter clean
+          flutter pub get
+          if [ "$BUILD_TYPE" = "debug" ]; then
+            flutter build apk --debug
+          else
+            flutter build apk --release
+          fi
+
+      - name: Locate APK
+        run: |
+          set -e
+          APK_PATH=$(find "$PROJECT_ROOT" -type f -name "app-$BUILD_TYPE.apk" -path "*/flutter-apk/*" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "::error::APK tidak ditemukan setelah build"
+            find "$PROJECT_ROOT/build" -maxdepth 5 2>/dev/null || true
+            exit 1
+          fi
+          echo "APK_PATH=$APK_PATH" >> "$GITHUB_ENV"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ github.event.inputs.jobId }}
+          path: ${{ env.APK_PATH }}
