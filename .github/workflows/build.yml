@@ -24,6 +24,23 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Lihat isi repo
+        run: ls -la && find . -maxdepth 3 -not -path "./.git/*" | head -60
+
+      - name: Unzip project
+        run: |
+          find . -maxdepth 3 -name "*.zip" -not -path "./.git/*" -exec unzip -o -q {} \;
+
+      - name: Find project root
+        id: root
+        run: |
+          P=$(find . -name pubspec.yaml -not -path "*/.*" -not -path "*/.pub-cache/*" | head -n1)
+          if [ -z "$P" ]; then
+            echo "pubspec.yaml tidak ditemukan"
+            exit 1
+          fi
+          echo "dir=$(dirname "$P")" >> "$GITHUB_OUTPUT"
+
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
@@ -36,7 +53,9 @@ jobs:
           channel: stable
 
       - name: Install Dependencies
+        working-directory: ${{ steps.root.outputs.dir }}
         run: flutter pub get
 
       - name: Build APK
+        working-directory: ${{ steps.root.outputs.dir }}
         run: flutter build apk --release
